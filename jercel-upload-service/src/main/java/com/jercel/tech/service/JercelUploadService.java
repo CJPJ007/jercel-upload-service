@@ -15,6 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import com.jercel.tech.helpers.CloudflareR2Client;
 import com.jercel.tech.helpers.GCSFolderUploader;
 
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,9 @@ public class JercelUploadService {
 
     @Autowired
     RedisPushService redisPushService;
+
+    @Autowired
+    CloudflareR2Client cloudflareR2Client;
 
     public ResponseEntity<String> uploadGitRepo(String gitRepoURL) {
         log.info("Inside uploadGitRepo : {}", gitRepoURL);
@@ -89,7 +93,8 @@ public class JercelUploadService {
     private String readFile(File file) {
         log.info("Inside readFile");
         try {
-            return gcsFolderUploader.uploadFolder(file.toPath());
+            // return gcsFolderUploader.uploadFolder(file.toPath());
+            return cloudflareR2Client.uploadFolder(file.toPath());
         } catch (Exception e) {
             log.error("Exception in readFile ", e);
         }

@@ -1,40 +1,90 @@
 package com.jercel.tech.helpers;
 
-import com.google.cloud.storage.Blob;
-import com.google.cloud.storage.BlobId;
-import com.google.cloud.storage.BlobInfo;
-import com.google.cloud.storage.Storage;
-import com.google.cloud.storage.StorageOptions;
-import com.jercel.tech.service.RedisPushService;
-
-import lombok.extern.slf4j.Slf4j;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.*;
+import software.amazon.awssdk.services.s3.S3Configuration;
 
 import java.io.IOException;
-import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
+import java.net.URI;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
+import com.jercel.tech.service.RedisPushService;
+
+import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Client for interacting with Cloudflare R2 Storage using AWS SDK S3
+ * compatibility
+ */
+@Service
 @Slf4j
-@Component
-public class GCSFolderUploader {
+public class CloudflareR2Client {
 
-    private final Storage storage;
-
-    @Autowired
-    RedisPushService redisPushService;
-
+    /**
+     * Configuration class for R2 credentials and endpoint
+     */
+    @Value("${r2.api.access.key}")
+    private String accessKey;
+    @Value("${r2.api.secret.key}")
+    private String secretKey;
+    @Value("${r2.endpoint.url}")
+    private String endpoint;
     @Value("${bucket.name}")
     private String bucketName;
 
-    public GCSFolderUploader() {
-        this.storage = StorageOptions.getDefaultInstance().getService();
+    private S3Client s3Client;
+    @Autowired
+    RedisPushService redisPushService;
+
+    /**
+     * Builds and configures the S3 client with R2-specific settings
+     */
+    @PostConstruct
+    private void buildS3Client() {
+        AwsBasicCredentials credentials = AwsBasicCredentials.create(
+                accessKey,
+                secretKey);
+
+        S3Configuration serviceConfiguration = S3Configuration.builder()
+                .pathStyleAccessEnabled(true)
+                .build();
+
+        s3Client = S3Client.builder()
+                .endpointOverride(URI.create(endpoint))
+                .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                .region(Region.of("auto"))
+                .serviceConfiguration(serviceConfiguration)
+                .build();
+    }
+
+    /**
+     * Lists all objects in the specified bucket
+     */
+    public List<S3Object> listObjects(String bucketName) {
+        try {
+            ListObjectsV2Request request = ListObjectsV2Request.builder()
+                    .bucket(bucketName)
+                    .build();
+
+            return s3Client.listObjectsV2(request).contents();
+        } catch (S3Exception e) {
+            throw new RuntimeException("Failed to list objects in bucket " + bucketName + ": " + e.getMessage(), e);
+        }
     }
 
     public String uploadFolder(Path sourceFolder) throws IOException {
@@ -91,11 +141,12 @@ public class GCSFolderUploader {
                 + relativePath.toString().replace(FileSystems.getDefault().getSeparator(), "/"); // GCS uses '/' as
                                                                                                  // separator
 
-        BlobId blobId = BlobId.of(bucketName, objectName);
-        BlobInfo blobInfo = BlobInfo.newBuilder(blobId).build();
-
+        PutObjectRequest putObjectRequest = PutObjectRequest.builder()
+                .bucket(bucketName)
+                .key(objectName)
+                .build();
         // Upload the file
-        Blob uploadedBlob = storage.create(blobInfo, Files.readAllBytes(filePath));
+        PutObjectResponse putObjectResponse = s3Client.putObject(putObjectRequest, RequestBody.fromFile(filePath));
         // log.info("Uploaded Blob : {}", uploadedBlob.getBlobId());
         // log.info("Uploaded : {}", objectName);
     }
